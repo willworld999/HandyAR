@@ -1,0 +1,19 @@
+{
+  "name": "handyar",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build"
+  },
+  "dependencies": {
+    "three": "^0.160.0",
+    "@mediapipe/hands": "^0.4.1646424915",
+    "gsap": "^3.12.5"
+  },
+  "devDependencies": {
+    "vite": "^5.0.0",
+    "typescript": "^5.2.2",
+    "@types/three": "^0.160.0",
+    "vite-plugin-mkcert": "^1.17.1"
+  }
+}
