@@ -3,11 +3,12 @@ import { Hands, Results } from '@mediapipe/hands';
 export class ARManager {
   private video: HTMLVideoElement;
   private hands: Hands;
-  // 引入高阶平滑缓存
-  private smoothedPos = { x: 0.5, y: 0.5, z: 0 }; 
-  private lerpFactor = 0.15; // 平滑系数，越小越稳，越大越灵敏（建议 0.1 - 0.2）
-
+  // 缓存上一次的坐标，用于计算速度并进行平滑
+  private lastPos = { x: 0.5, y: 0.5, z: 0 };
+  private smoothedPos = { x: 0.5, y: 0.5, z: 0 };
+  
   public handWorldPosition: { x: number; y: number; z: number } | null = null;
+  public isGrabbing: boolean = false;
 
   constructor() {
     this.video = document.createElement('video');
@@ -18,12 +19,12 @@ export class ARManager {
       locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`,
     });
 
-    // 核心优化：提升模型等级与置信度阈值
+    // 性能优化配置
     this.hands.setOptions({
       maxNumHands: 1,
-      modelComplexity: 1, // 0 为轻量，1 为全量。软件工程权衡：精度 vs 功耗
-      minDetectionConfidence: 0.85, // 仅当识别度超过 85% 才初始化
-      minTrackingConfidence: 0.85,  // 追踪过程中更严格，防止误判
+      modelComplexity: 1, // 软工建议：1 在移动端表现最稳，0 虽快但精度低
+      minDetectionConfidence: 0.75, // 初始化阈值
+      minTrackingConfidence: 0.85,  // 追踪阈值：提高此值可减少误识别产生的“瞬移”
     });
 
     this.hands.onResults(this.onResults.bind(this));
@@ -31,12 +32,12 @@ export class ARManager {
   }
 
   private async startCamera() {
-    // 增加分辨率有助于小范围内的指尖捕捉更精准
+    // 强制使用 HD 分辨率提高识别细节
     const stream = await navigator.mediaDevices.getUserMedia({ 
       video: { 
-        facingMode: 'user',
-        width: { ideal: 1280 },
-        height: { ideal: 720 }
+        facingMode: 'user', 
+        width: { ideal: 1280 }, 
+        height: { ideal: 720 } 
       } 
     });
     this.video.srcObject = stream;
@@ -51,21 +52,34 @@ export class ARManager {
 
   private onResults(results: Results) {
     if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-      // 获取食指指尖 (Tip)
-      const rawLandmark = results.multiHandLandmarks[0][8];
+      const landmarks = results.multiHandLandmarks[0];
+      const tip = landmarks[8]; // 食指尖
       
-      // 核心平滑逻辑：Current = Current + (Target - Current) * Factor
-      // 这能有效过滤掉传感器采集时的微小高频噪声
-      this.smoothedPos.x += (rawLandmark.x - this.smoothedPos.x) * this.lerpFactor;
-      this.smoothedPos.y += (rawLandmark.y - this.smoothedPos.y) * this.lerpFactor;
-      this.smoothedPos.z += (rawLandmark.z - this.smoothedPos.z) * this.lerpFactor;
+      // 1. 自适应平滑系数：根据手指移动速度动态调整平滑度
+      // 移动快时降低平滑（减小延迟），移动慢时增强平滑（减小抖动）
+      const dx = Math.abs(tip.x - this.lastPos.x);
+      const dy = Math.abs(tip.y - this.lastPos.y);
+      const speed = dx + dy;
+      const alpha = Math.min(0.35, 0.1 + speed * 5); // 动态 Alpha 逻辑
 
-      // 镜像坐标系转换
+      this.smoothedPos.x += (tip.x - this.smoothedPos.x) * alpha;
+      this.smoothedPos.y += (tip.y - this.smoothedPos.y) * alpha;
+      this.smoothedPos.z += (tip.z - this.smoothedPos.z) * alpha;
+
+      this.lastPos = { ...tip };
+
+      // 2. 坐标空间映射
       this.handWorldPosition = {
-        x: (0.5 - this.smoothedPos.x) * 14, 
+        x: (0.5 - this.smoothedPos.x) * 16, // 放大操作空间
         y: (0.5 - this.smoothedPos.y) * 10,
-        z: -this.smoothedPos.z * 12
+        z: -this.smoothedPos.z * 15
       };
+
+      // 3. 逻辑判定：握拳检测
+      const wrist = landmarks[0];
+      const middleTip = landmarks[12];
+      const dist = Math.sqrt(Math.pow(middleTip.x - wrist.x, 2) + Math.pow(middleTip.y - wrist.y, 2));
+      this.isGrabbing = dist < 0.25; // 判定手掌是否收缩
     } else {
       this.handWorldPosition = null;
     }
